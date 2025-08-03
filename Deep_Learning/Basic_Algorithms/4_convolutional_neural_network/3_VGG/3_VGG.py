@@ -104,6 +104,23 @@ class VGG16Net(nn.Module):
             nn.Dropout(0.5),
             nn.Linear(256, num_classes)
         )
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                # 卷积层使用高斯分布初始化
+                nn.init.normal_(m.weight, mean=0, std=0.01)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                # BN层使用常数初始化
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                # 全连接层使用高斯分布初始化
+                nn.init.normal_(m.weight, mean=0, std=0.01)
+                nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
         x = self.block1(x)
@@ -136,14 +153,14 @@ if __name__ == '__main__':
         transforms.RandomHorizontalFlip(),  # 随机水平翻转
         transforms.RandomRotation(10),  # 随机旋转
         transforms.ToTensor(),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
     ])
 
     # 验证和测试不需要数据增强
     test_transform = transforms.Compose([
         transforms.Resize(32),
         transforms.ToTensor(),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
     ])
 
     # 加载训练集
@@ -385,4 +402,6 @@ if __name__ == '__main__':
 卷积层: k*k*C_in*C_out*H_out*W_out
 全连接层: C_in*C_out
 以VGG16为例，虽然卷积层参数只占10%左右，但是计算量却很大(2.16GFlOPS，占总计算量95%)
+
+此外，去掉全部BN层（原始VGG模型）后，出现了跟Lenet类似的情况，始终准确率在10%左右，可见调参在BN、adam之前的困难性
 '''
