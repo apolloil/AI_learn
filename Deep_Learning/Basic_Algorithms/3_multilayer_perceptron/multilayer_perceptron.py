@@ -13,7 +13,7 @@ from PIL import Image
 
 '''
 任务：
-使用MLP,结合权重衰减、Dropout、数据增强等正则化方法
+使用MLP(2个隐藏层)
 对CIFAR10数据集进行分类
 '''
 
@@ -96,7 +96,7 @@ if __name__ == '__main__':
     # ==================== 2. 模型配置 ====================
 
     # 创建数据加载器
-    batch_size = 128  # 增大批大小以提高效率
+    batch_size = 128
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,
                               pin_memory=(device.type == 'cuda'))
     val_loader = DataLoader(val_set, batch_size=batch_size,
@@ -114,21 +114,16 @@ if __name__ == '__main__':
     print(f"图像尺寸: {sample_image.shape[0]}x{sample_image.shape[1]}x{sample_image.shape[2]}")
     print(f"输入维度: {input_dim}, 隐藏层1维度: {hidden_dim1}, 隐藏层2维度: {hidden_dim2}, 输出维度: {output_dim}")
 
-    num_epochs = 20
+    num_epochs = 30
     learning_rate = 0.02
-    weight_decay = 1e-4
-    dropout_rate = 0.3
-
 
     # 定义MLP模型
     model = nn.Sequential(
                 nn.Flatten(),  # 将图像展平为向量
                 nn.Linear(input_dim, hidden_dim1),
                 nn.ReLU(),
-                nn.Dropout(dropout_rate),  # 第一层后添加Dropout
                 nn.Linear(hidden_dim1, hidden_dim2),
                 nn.ReLU(),
-                nn.Dropout(dropout_rate),  # 第二层后添加Dropout
                 nn.Linear(hidden_dim2, output_dim)  # 输出logits
             ).to(device)
 
@@ -139,8 +134,7 @@ if __name__ == '__main__':
     criterion = nn.CrossEntropyLoss()
 
     # 添加权重衰减
-    optimizer = optim.SGD(model.parameters(), lr=learning_rate,
-                          momentum=0.9, weight_decay=weight_decay)
+    optimizer = optim.SGD(model.parameters(), lr=learning_rate)
 
     # ==================== 3. 训练循环 ====================
     print("开始训练...")
@@ -317,8 +311,6 @@ if __name__ == '__main__':
 
 '''
 结果评估：
-经过实验，在kaggle上面的得分中
-没有优化的MLP大约处于50%左右的水平
-优化后大概能达到55%左右，有一定提升
-但是模型分类效果还是很弱
+对测试集的分类准确度大概在54.6%左右
+经过实验，若直接用linear做分类，30个epoch后test准确度大概为40.5%，可见还是有较大提高
 '''

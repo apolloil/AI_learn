@@ -10,7 +10,8 @@ import time
 
 '''
 任务：
-使用线性回归模型结合梯度下降算法，对房价数据(..\\data\\house_price_prediction）进行训练
+使用线性回归模型结合梯度下降算法，
+对房价数据(..\\data\\house_price_prediction）(注意：已经经过数据预处理)进行训练
 由于dataset小(只有1千多)，使用k折交叉验证,从而调整超参数
 '''
 
