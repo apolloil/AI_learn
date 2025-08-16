@@ -1,219 +1,97 @@
+"""
+用于离散环境的MC epsilon-greedy算法
+"""
+
 import gymnasium as gym
 import numpy as np
-import time
-from collections import defaultdict
-import matplotlib.pyplot as plt
-import os
-from gymnasium.wrappers import RecordVideo
-
-# 禁用matplotlib弹窗
-plt.switch_backend('agg')
+from utils.timer import timer
+from utils.RLrender import RLrender
 
 
-def epsilon_greedy_policy(q_table, state, epsilon, n_actions):
-    """Epsilon-greedy策略选择动作"""
-    if np.random.random() < epsilon:
-        return np.random.randint(n_actions)
-    else:
-        return np.argmax(q_table[state])
+@timer
+def monte_carlo_epsilon_greedy(env, render_env, train_episodes, gamma, initial_epsilon, min_epsilon, video_interval):
 
+    # MC epsilon-greedy算法
+    num_state = env.observation_space.n
+    num_action = env.action_space.n
 
-def create_video_env(env_name, env_params, video_folder, video_prefix):
-    """创建视频录制环境"""
-    env = gym.make(env_name, **env_params, render_mode='rgb_array')
-    env = RecordVideo(
-        env,
-        video_folder=video_folder,
-        episode_trigger=lambda ep_idx: True,  # 录制所有传递到这个环境的episode
-        name_prefix=video_prefix,
-        disable_logger=True
-    )
-    return env
+    # 初始化Q表和N表
+    Q = N = np.zeros((num_state, num_action))
+    g_history = []
 
-
-def monte_carlo_epsilon_greedy(env, env_params, num_episodes=10000, gamma=0.99,
-                               initial_epsilon=0.5, min_epsilon=0.01,
-                               video_interval=500, video_folder="videos"):
-    n_states = env.observation_space.n
-    n_actions = env.action_space.n
-
-    q_table = np.zeros((n_states, n_actions))
-    g_sum = defaultdict(lambda: np.zeros(n_actions))
-    visit_count = defaultdict(lambda: np.zeros(n_actions))
-    success_history = []
-
-    # 创建视频目录
-    os.makedirs(video_folder, exist_ok=True)
-
-    # 用于存储每个录制环境的列表
-    video_envs = {}
-
-    for episode in range(num_episodes):
+    for episode in range(train_episodes):
         # 动态调整探索率
-        epsilon = max(min_epsilon, initial_epsilon * (1 - episode / (num_episodes * 1.2)))
+        epsilon = initial_epsilon - (initial_epsilon - min_epsilon) * episode / train_episodes
 
-        # 检查是否需要录制当前episode
-        if episode % video_interval == 0:
-            # 创建新的录制环境 - 只录制当前episode
-            video_prefix = f"training_episode_{episode}"
-
-            # 创建录制环境
-            video_env = create_video_env(
-                'FrozenLake-v1',
-                env_params,
-                video_folder,
-                video_prefix
-            )
-
-            print(f"创建录制环境用于episode {episode}")
-            # 使用录制环境
-            current_env = video_env
-
-            # 存储录制环境以便后续关闭
-            video_envs[episode] = video_env
-        else:
-            # 使用普通训练环境
-            current_env = env
-
-        # 重置环境
-        state, _ = current_env.reset()
+        # 初始化环境
+        state = env.reset()[0]
         episode_data = []
         terminated = False
         truncated = False
 
+        tot_g = 0
+        cnt = 0
         while not (terminated or truncated):
-            action = epsilon_greedy_policy(q_table, state, epsilon, n_actions)
-            next_state, reward, terminated, truncated, _ = current_env.step(action)
+            if np.random.random() < epsilon:
+                action = env.action_space.sample()
+            else:
+                action = np.argmax(Q[state])
+            next_state, reward, terminated, truncated, _ = env.step(action)
+            tot_g += float(reward) * gamma ** cnt
+            cnt += 1
             episode_data.append((state, action, reward))
             state = next_state
 
-        # 记录是否成功
-        success = 1 if reward > 0 else 0
-        success_history.append(success)
+        # 记录g值
+        g_history.append(tot_g)
 
-        # 如果是录制环境，立即关闭（因为只用于一个episode）
-        if episode in video_envs:
-            video_envs[episode].close()
-            del video_envs[episode]
-
-        # 蒙特卡洛更新（首次访问法）
-        G = 0
-        visited = set()
+        # 更新Q表
+        tem_g = 0
         for t in range(len(episode_data) - 1, -1, -1):
             state, action, reward = episode_data[t]
-            G = gamma * G + reward
+            tem_g = reward + gamma * tem_g
+            N[state, action] += 1
+            Q[state, action] += (tem_g - Q[state, action]) / N[state, action]
 
-            if (state, action) not in visited:
-                visited.add((state, action))
-                visit_count[state][action] += 1
-                g_sum[state][action] += G
-                q_table[state][action] = g_sum[state][action] / visit_count[state][action]
+        # 如果处于录制间隔，则根据当前策略录制视频
+        if episode % video_interval == 0:
+            render_env.pe(lambda state: np.argmax(Q[state]), gamma, f"train_{episode}")
 
-        # 打印进度
-        if episode % 500 == 0:
-            recent_success = np.mean(success_history[-100:]) if success_history else 0
-            print(f"Episode {episode}/{num_episodes} | "
-                  f"Success Rate: {recent_success:.2f} | "
-                  f"Epsilon: {epsilon:.4f}")
-
-    # 训练结束时关闭任何可能未关闭的录制环境
-    for env in video_envs.values():
-        env.close()
-
-    return q_table, success_history
-
-
-def evaluate_policy(env_name, Q, num_episodes=5, video_folder="evaluation_videos", **env_kwargs):
-    """评估策略并录制视频"""
-    os.makedirs(video_folder, exist_ok=True)
-
-    # 创建视频录制环境
-    video_prefix = "evaluation"
-    eval_env = create_video_env(
-        env_name,
-        env_kwargs,
-        video_folder,
-        video_prefix
-    )
-
-    wins = 0
-    paths = []
-
-    for ep in range(num_episodes):
-        state, _ = eval_env.reset()
-        terminated = False
-        truncated = False
-        path = [state]
-        steps = 0
-
-        while not (terminated or truncated):
-            action = np.argmax(Q[state])
-            state, reward, terminated, truncated, _ = eval_env.step(action)
-            path.append(state)
-            steps += 1
-            time.sleep(0.1)  # 控制视频速度
-
-        if reward > 0:
-            wins += 1
-            print(f"Episode {ep + 1}: 成功! 步数: {steps} | 路径: {path}")
-        else:
-            print(f"Episode {ep + 1}: 失败! 最终位置: {state}")
-
-        paths.append(path)
-
-    eval_env.close()
-    return wins / num_episodes, paths
+    return Q, g_history
 
 
 if __name__ == "__main__":
-    # 设置训练环境参数（super）
-    env_params = {
-        'map_name': "8x8",
-        'is_slippery': True
-    }
-    # 创建训练环境
-    env = gym.make('FrozenLake-v1', **env_params, render_mode=None)
 
-    # 设置训练参数(super)
-    num_episodes = 500000
+    # 设置训练环境
+    env_name = 'FrozenLake-v1'
+    env_params = {
+        'map_name': "4x4",
+        'is_slippery': False
+    }
+
+    # 设置训练参数
+    train_episodes = 100000
     gamma = 0.8
     initial_epsilon = 0.6
+    min_epsilon = 0.05
     video_interval = 50000  # 录制视频间隔
 
-    print("=" * 50)
-    print("开始训练 - FrozenLake Monte Carlo Epsilon-Greedy")
-    print(f"总训练回合: {num_episodes} | 折扣因子: {gamma} | 初始探索率: {initial_epsilon}")
-    print(f"将录制episode 0, 500, 1000, 1500...的视频")
-    print("=" * 50)
+    # 创建训练环境
+    env = gym.make(env_name, **env_params, render_mode=None)
+    # 创建render环境
+    render_env = RLrender(env_name, env_params)
 
-    # 训练模型
-    start_time = time.time()
-    Q_table, success_history = monte_carlo_epsilon_greedy(
-        env,
-        env_params=env_params,
-        num_episodes=num_episodes,
-        gamma=gamma,
-        initial_epsilon=initial_epsilon,
-        video_interval=video_interval
-    )
-    end_time = time.time()
+    # 算法
+    Q, g_history = monte_carlo_epsilon_greedy(env, render_env, train_episodes,
+                                              gamma, initial_epsilon, min_epsilon, video_interval)
 
-    # 评估模型
-    print("\n训练完成! 开始可视化测试并录制评估视频...")
-    win_rate, paths = evaluate_policy('FrozenLake-v1', Q_table, num_episodes=5, **env_params)
-
-    # 打印结果
-    print(f"\n训练用时: {end_time - start_time:.2f}秒")
-    print(f"最终成功率: {win_rate * 100:.2f}%")
-    print("成功路径示例:", [p for p in paths if p[-1] == 15][:1])
-
-    # 保存学习曲线
-    plt.figure(figsize=(10, 5))
-    plt.plot(np.convolve(success_history, np.ones(100) / 100, mode='valid'))
-    plt.title("训练成功率(100-episodes平均)")
-    plt.xlabel("训练回合")
-    plt.ylabel("成功率")
-    plt.savefig("learning_curve.png")
-    print("学习曲线已保存为 learning_curve.png")
-
+    # 关闭环境
     env.close()
+
+    # 绘制学习曲线
+    render_env.plot_learning(g_history)
+
+    # 进行测试
+    g_test = render_env.pe(lambda state: np.argmax(Q[state]), gamma, f"test")
+    print(f"测试完成！最终奖励为：{g_test}")
+
